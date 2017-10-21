@@ -127,7 +127,7 @@ def find_reasonable_epsilon(theta0, grad0, logp0, f):
         _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon, f)
         acceptprob = np.exp(logpprime - logp0 - 0.5 * ( np.dot(rprime, rprime.T) - np.dot(r0, r0.T)))
 
-    print "find_reasonable_epsilon=", epsilon
+    print("find_reasonable_epsilon=", epsilon)
 
     return epsilon
 

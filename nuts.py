@@ -118,16 +118,16 @@ def find_reasonable_epsilon(theta0, grad0, logp0, f):
 
     epsilon = 0.5 * k * epsilon
 
-    acceptprob = np.exp(logpprime - logp0 - 0.5 * (np.dot(rprime, rprime.T) - np.dot(r0, r0.T)))
+    logacceptprob = logpprime - logp0 - 0.5 * (np.dot(rprime, rprime.T) - np.dot(r0, r0.T))
 
-    a = 2. * float((acceptprob > 0.5)) - 1.
+    a = 2. * float((exp(logacceptprob) > 0.5)) - 1.
     # Keep moving epsilon in that direction until acceptprob crosses 0.5.
-    while ( (acceptprob ** a) > (2. ** (-a))):
+    while ( a*logacceptprob > -a*np.log(2.)):
         epsilon = epsilon * (2. ** a)
         _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon, f)
-        acceptprob = np.exp(logpprime - logp0 - 0.5 * ( np.dot(rprime, rprime.T) - np.dot(r0, r0.T)))
+        logacceptprob = logpprime - logp0 - 0.5 * ( np.dot(rprime, rprime.T) - np.dot(r0, r0.T))
 
-    print("find_reasonable_epsilon=", epsilon)
+    # print("find_reasonable_epsilon=", epsilon)
 
     return epsilon
 
@@ -199,7 +199,7 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0):
     return thetaminus, rminus, gradminus, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alphaprime, nalphaprime
 
 
-def nuts6(f, M, Madapt, theta0, delta=0.6):
+def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
     """
     Implements the No-U-Turn Sampler (NUTS) algorithm 6 from from the NUTS
     paper (Hoffman & Gelman, 2011).
@@ -256,6 +256,7 @@ def nuts6(f, M, Madapt, theta0, delta=0.6):
 
     # Choose a reasonable first epsilon by a simple heuristic.
     epsilon = find_reasonable_epsilon(theta0, grad, logp, f)
+    logepsilon = log(epsilon)
 
     # Parameters to the dual averaging algorithm.
     gamma = 0.05
@@ -264,7 +265,7 @@ def nuts6(f, M, Madapt, theta0, delta=0.6):
     mu = log(10. * epsilon)
 
     # Initialize dual averaging algorithm.
-    epsilonbar = 1
+    logepsilonbar = 0
     Hbar = 0
 
     for m in range(1, M + Madapt):
@@ -314,20 +315,23 @@ def nuts6(f, M, Madapt, theta0, delta=0.6):
                 grad = gradprime[:]
             # Update number of valid points we've seen.
             n += nprime
-            # Decide if it's time to stop.
-            s = sprime and stop_criterion(thetaminus, thetaplus, rminus, rplus)
             # Increment depth.
             j += 1
+            # Decide if it's time to stop.
+            s = sprime and stop_criterion(thetaminus, thetaplus, rminus, rplus) and j < max_tree_depth
 
-        # Do adaptation of epsilon if we're still doing burn-in.
-        eta = 1. / float(m + t0)
-        Hbar = (1. - eta) * Hbar + eta * (delta - alpha / float(nalpha))
         if (m <= Madapt):
-            epsilon = exp(mu - sqrt(m) / gamma * Hbar)
+            # Do adaptation of epsilon if we're still doing burn-in.
+            eta = 1. / float(m + t0)
+            Hbar = (1. - eta) * Hbar + eta * (delta - alpha / float(nalpha))
+            logepsilon = mu - sqrt(m) / gamma * Hbar
             eta = m ** -kappa
-            epsilonbar = exp((1. - eta) * log(epsilonbar) + eta * log(epsilon))
+            logepsilonbar = (1. - eta) * logepsilonbar + eta * logepsilon
         else:
-            epsilon = epsilonbar
+            logepsilon = logepsilonbar
+        epsilon = exp(logepsilon)
+
+        print('It {0}: logp = {1}, j = {2}'.format(m,lnprob[m],j))
     samples = samples[Madapt:, :]
     lnprob = lnprob[Madapt:]
     return samples, lnprob, epsilon

@@ -331,7 +331,7 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
             logepsilon = logepsilonbar
         epsilon = exp(logepsilon)
 
-        print('It {0}: logp = {1}, j = {2}'.format(m,lnprob[m],j))
+        # print('It {0}: logp = {1}, j = {2}'.format(m,lnprob[m],j))
     samples = samples[Madapt:, :]
     lnprob = lnprob[Madapt:]
     return samples, lnprob, epsilon

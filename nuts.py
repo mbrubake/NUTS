@@ -101,9 +101,9 @@ def leapfrog(theta, r, grad, epsilon, f):
     return thetaprime, rprime, gradprime, logpprime
 
 
-def find_reasonable_epsilon(theta0, grad0, logp0, f):
+def find_reasonable_epsilon(theta0, grad0, logp0, f, epsilon0):
     """ Heuristic for choosing an initial value of epsilon """
-    epsilon = 1.
+    epsilon = float(1.0*epsilon0)
     r0 = np.random.normal(0., 1., len(theta0))
 
     # Figure out what direction we should be moving epsilon.
@@ -112,9 +112,9 @@ def find_reasonable_epsilon(theta0, grad0, logp0, f):
     # values of the likelihood. This could also help to make sure theta stays
     # within the prior domain (if any)
     k = 1.
-    while np.isinf(logpprime) or np.isinf(gradprime).any():
+    while not (np.isfinite(logpprime) and np.isfinite(gradprime).all()):
         k *= 0.5
-        _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon * k, f)
+        _, rprime, gradprime, logpprime = leapfrog(theta0, r0, grad0, epsilon * k, f)
 
     epsilon = 0.5 * k * epsilon
 
@@ -122,10 +122,11 @@ def find_reasonable_epsilon(theta0, grad0, logp0, f):
 
     a = 2. * float((exp(logacceptprob) > 0.5)) - 1.
     # Keep moving epsilon in that direction until acceptprob crosses 0.5.
-    while ( a*logacceptprob > -a*np.log(2.)):
+    while (a*logacceptprob > -a*np.log(2.)):
         epsilon = epsilon * (2. ** a)
         _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon, f)
         logacceptprob = logpprime - logp0 - 0.5 * ( np.dot(rprime, rprime.T) - np.dot(r0, r0.T))
+        # print('logacceptprob = {0}'.format(logacceptprob))
 
     # print("find_reasonable_epsilon=", epsilon)
 
@@ -157,11 +158,11 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0):
     if (j == 0):
         # Base case: Take a single leapfrog step in the direction v.
         thetaprime, rprime, gradprime, logpprime = leapfrog(theta, r, grad, v * epsilon, f)
-        joint = logpprime - 0.5 * np.dot(rprime, rprime.T)
+        joint = float(logpprime) - 0.5 * np.dot(rprime, rprime.T)
         # Is the new point in the slice?
         nprime = int(logu < joint)
         # Is the simulation wildly inaccurate?
-        sprime = int((logu - 1000.) < joint)
+        sprime = np.isfinite(joint) and int((logu - 1000.) < joint)
         # Set the return values---minus=plus for all things here, since the
         # "tree" is of depth 0.
         thetaminus = thetaprime[:]
@@ -171,8 +172,11 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0):
         gradminus = gradprime[:]
         gradplus = gradprime[:]
         # Compute the acceptance probability.
-        alphaprime = min(1., np.exp(joint - joint0))
-        #alphaprime = min(1., np.exp(logpprime - 0.5 * np.dot(rprime, rprime.T) - joint0))
+        if not np.isfinite(joint):
+            alphaprime = 0
+        else:
+            alphaprime = min(1., np.exp(joint - joint0))
+            #alphaprime = min(1., np.exp(logpprime - 0.5 * np.dot(rprime, rprime.T) - joint0))
         nalphaprime = 1
     else:
         # Recursion: Implicitly build the height j-1 left and right subtrees.
@@ -199,7 +203,7 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0):
     return thetaminus, rminus, gradminus, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alphaprime, nalphaprime
 
 
-def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
+def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0):
     """
     Implements the No-U-Turn Sampler (NUTS) algorithm 6 from from the NUTS
     paper (Hoffman & Gelman, 2011).
@@ -255,7 +259,7 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
     lnprob[0] = logp
 
     # Choose a reasonable first epsilon by a simple heuristic.
-    epsilon = find_reasonable_epsilon(theta0, grad, logp, f)
+    epsilon = find_reasonable_epsilon(theta0, grad, logp, f, epsilon0)
     logepsilon = log(epsilon)
 
     # Parameters to the dual averaging algorithm.
@@ -320,6 +324,8 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
             # Decide if it's time to stop.
             s = sprime and stop_criterion(thetaminus, thetaplus, rminus, rplus) and j < max_tree_depth
 
+        # print('It {0}: logp = {1:.2f}, j = {2}, E[accept]= {3:.3f}, epsilon = {4}'.format(m,lnprob[m],j,alpha/float(nalpha),epsilon))
+
         if (m <= Madapt):
             # Do adaptation of epsilon if we're still doing burn-in.
             eta = 1. / float(m + t0)
@@ -331,7 +337,6 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7):
             logepsilon = logepsilonbar
         epsilon = exp(logepsilon)
 
-        # print('It {0}: logp = {1}, j = {2}'.format(m,lnprob[m],j))
     samples = samples[Madapt:, :]
     lnprob = lnprob[Madapt:]
     return samples, lnprob, epsilon

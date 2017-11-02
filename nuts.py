@@ -54,6 +54,7 @@ reference: arXiv:1111.4246
 Carlo", Matthew D. Hoffman & Andrew Gelman
 """
 import numpy as np
+import sys
 from numpy import log, exp, sqrt
 
 __all__ = ['nuts6']
@@ -101,31 +102,31 @@ def leapfrog(theta, r, grad, epsilon, f, inv_mass):
     return thetaprime, rprime, gradprime, logpprime
 
 
-def find_reasonable_epsilon(theta0, grad0, logp0, f, epsilon0):
+def find_reasonable_epsilon(theta0, grad0, logp0, f, epsilon0, inv_mass=0):
     """ Heuristic for choosing an initial value of epsilon """
     epsilon = float(1.0*epsilon0)
     r0 = np.random.normal(0., 1., len(theta0))
 
     # Figure out what direction we should be moving epsilon.
-    _, rprime, gradprime, logpprime = leapfrog(theta0, r0, grad0, epsilon, f, 1.0)
+    _, rprime, gradprime, logpprime = leapfrog(theta0, r0, grad0, epsilon, f, inv_mass)
     # brutal! This trick make sure the step is not huge leading to infinite
     # values of the likelihood. This could also help to make sure theta stays
     # within the prior domain (if any)
     k = 1.
     while not (np.isfinite(logpprime) and np.isfinite(gradprime).all()):
         k *= 0.5
-        _, rprime, gradprime, logpprime = leapfrog(theta0, r0, grad0, epsilon * k, f, 1.0)
+        _, rprime, gradprime, logpprime = leapfrog(theta0, r0, grad0, epsilon * k, f, inv_mass)
 
     epsilon = 0.5 * k * epsilon
 
-    logacceptprob = logpprime - logp0 - 0.5 * (np.dot(rprime, rprime.T) - np.dot(r0, r0.T))
+    logacceptprob = logpprime - logp0 - 0.5 * (np.dot(rprime, (inv_mass*rprime).T) - np.dot(r0, (inv_mass*r0).T))
 
     a = 2. * float((exp(logacceptprob) > 0.5)) - 1.
     # Keep moving epsilon in that direction until acceptprob crosses 0.5.
     while (a*logacceptprob > -a*np.log(2.)):
         epsilon = epsilon * (2. ** a)
-        _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon, f)
-        logacceptprob = logpprime - logp0 - 0.5 * ( np.dot(rprime, rprime.T) - np.dot(r0, r0.T))
+        _, rprime, _, logpprime = leapfrog(theta0, r0, grad0, epsilon, f, inv_mass)
+        logacceptprob = logpprime - logp0 - 0.5 * ( np.dot(rprime, (inv_mass*rprime).T) - np.dot(r0, (inv_mass*r0).T))
         # print('logacceptprob = {0}'.format(logacceptprob))
 
     # print("find_reasonable_epsilon=", epsilon)
@@ -204,7 +205,7 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0, inv_mass_chol, in
     return thetaminus, rminus, gradminus, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alphaprime, nalphaprime
 
 
-def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estimate_mass=False):
+def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0, estimate_mass=True, log_file=sys.stdout):
     """
     Implements the No-U-Turn Sampler (NUTS) algorithm 6 from from the NUTS
     paper (Hoffman & Gelman, 2011).
@@ -259,8 +260,21 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estim
     samples[0, :] = theta0
     lnprob[0] = logp
 
+    if estimate_mass:
+        alpha = 0.8
+        diag_mass_avg = alpha*grad[:]**2 + (1-alpha)
+        diag_mass_N = 1
+
+        mass_chol = np.sqrt(diag_mass_avg)
+        inv_mass = 1.0/diag_mass_avg
+        inv_mass_chol = 1.0/mass_chol
+    else:
+        mass_chol = 1.0
+        inv_mass = 1.0
+        inv_mass_chol = 1.0
+
     # Choose a reasonable first epsilon by a simple heuristic.
-    epsilon = find_reasonable_epsilon(theta0, grad, logp, f, epsilon0)
+    epsilon = find_reasonable_epsilon(theta0, grad, logp, f, epsilon0, inv_mass)
     logepsilon = log(epsilon)
 
     # Parameters to the dual averaging algorithm.
@@ -272,13 +286,7 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estim
     # Initialize dual averaging algorithm.
     logepsilonbar = 0
     Hbar = 0
-
-    mass_chol = 1.0
-    inv_mass = 1.0
-    inv_mass_chol = 1.0
-    if estimate_mass:
-        diag_mass_avg = n.ones_like(grad[:])
-        diag_mass_N = 1
+    m_adapt = 1
 
     for m in range(1, M + Madapt):
         # Resample momenta.
@@ -314,9 +322,9 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estim
 
             # Double the size of the tree.
             if (v == -1):
-                thetaminus, rminus, gradminus, _, _, _, thetaprime, gradprime, logpprime, nprime, sprime, alpha, nalpha = build_tree(thetaminus, rminus, gradminus, logu, v, j, epsilon, f, joint, mass_chol, inv_mass_chol, inv_mass)
+                thetaminus, rminus, gradminus, _, _, _, thetaprime, gradprime, logpprime, nprime, sprime, alpha, nalpha = build_tree(thetaminus, rminus, gradminus, logu, v, j, epsilon, f, joint, inv_mass_chol, inv_mass)
             else:
-                _, _, _, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alpha, nalpha = build_tree(thetaplus, rplus, gradplus, logu, v, j, epsilon, f, joint, mass_chol, inv_mass_chol, inv_mass)
+                _, _, _, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alpha, nalpha = build_tree(thetaplus, rplus, gradplus, logu, v, j, epsilon, f, joint, inv_mass_chol, inv_mass)
 
             # Use Metropolis-Hastings to decide whether or not to move to a
             # point from the half-tree we just generated.
@@ -333,14 +341,16 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estim
             # Decide if it's time to stop.
             s = sprime and stop_criterion(thetaminus, thetaplus, rminus, rplus, inv_mass) and j < max_tree_depth
 
-        # print('It {0}: logp = {1:.2f}, j = {2}, E[accept]= {3:.3f}, epsilon = {4}'.format(m,lnprob[m],j,alpha/float(nalpha),epsilon))
+        print('It {0}: logp = {1:.2f}, j = {2}, E[accept]= {3:.4f}, epsilon = {4:.4g}'.format(m,lnprob[m],j,alpha/float(nalpha),epsilon),
+              file=log_file,flush=True)
         if (m <= Madapt):
             # Do adaptation of epsilon if we're still doing burn-in.
-            eta = 1. / float(m + t0)
+            eta = 1. / float(m_adapt + t0)
             Hbar = (1. - eta) * Hbar + eta * (delta - alpha / float(nalpha))
-            logepsilon = mu - sqrt(m) / gamma * Hbar
-            eta = m ** -kappa
+            logepsilon = mu - sqrt(m_adapt) / gamma * Hbar
+            eta = m_adapt ** -kappa
             logepsilonbar = (1. - eta) * logepsilonbar + eta * logepsilon
+            m_adapt += 1
 
             # update mass matrix approximation
             if estimate_mass:
@@ -350,6 +360,17 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=7, epsilon0=1.0, estim
                 mass_chol = np.sqrt(diag_mass_avg)
                 inv_mass = 1.0/diag_mass_avg
                 inv_mass_chol = 1.0/mass_chol
+
+            if m == int(0.25*Madapt) or m == int(0.75*Madapt):
+                # Reinitialize dual averaging algorithm.
+                logepsilon = logepsilonbar
+                logepsilonbar = 0
+                Hbar = 0
+                m_adapt = 1
+
+            if m == int(0.5*Madapt):
+                # Reinitialize mass matrix estimation
+                diag_mass_N = 1
         else:
             logepsilon = logepsilonbar
         epsilon = exp(logepsilon)

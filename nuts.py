@@ -205,7 +205,8 @@ def build_tree(theta, r, grad, logu, v, j, epsilon, f, joint0, inv_mass_chol, in
     return thetaminus, rminus, gradminus, thetaplus, rplus, gradplus, thetaprime, gradprime, logpprime, nprime, sprime, alphaprime, nalphaprime
 
 
-def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0, estimate_mass=True, log_file=sys.stdout):
+def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0,
+          estimate_mass=True, log_file=sys.stdout, print_freq=-1, mass_estimator='covar'):
     """
     Implements the No-U-Turn Sampler (NUTS) algorithm 6 from from the NUTS
     paper (Hoffman & Gelman, 2011).
@@ -263,6 +264,9 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0, esti
     if estimate_mass:
         alpha = 0.8
         diag_mass_avg = alpha*grad[:]**2 + (1-alpha)
+        if mass_estimator == 'covar':
+            diag_mass_mu = np.copy(theta0[:])
+            diag_mass_M2 = np.copy(diag_mass_avg)
         diag_mass_N = 1
 
         mass_chol = np.sqrt(diag_mass_avg)
@@ -341,8 +345,10 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0, esti
             # Decide if it's time to stop.
             s = sprime and stop_criterion(thetaminus, thetaplus, rminus, rplus, inv_mass) and j < max_tree_depth
 
-        print('It {0}: logp = {1:.2f}, j = {2}, E[accept]= {3:.4f}, epsilon = {4:.4g}'.format(m,lnprob[m],j,alpha/float(nalpha),epsilon),
-              file=log_file,flush=True)
+        if print_freq>0 and (m%print_freq == 0):
+            print('It {0}: logp = {1:.2f}, j = {2}, E[accept]= {3:.4f}, epsilon = {4:.4g}'.format(m,lnprob[m],j,alpha/float(nalpha),epsilon),
+                  file=log_file,flush=True)
+
         if (m <= Madapt):
             # Do adaptation of epsilon if we're still doing burn-in.
             eta = 1. / float(m_adapt + t0)
@@ -355,7 +361,13 @@ def nuts6(f, M, Madapt, theta0, delta=0.6, max_tree_depth=10, epsilon0=1.0, esti
             # update mass matrix approximation
             if estimate_mass:
                 diag_mass_N += 1
-                diag_mass_avg += (grad[:]**2 - diag_mass_avg)/diag_mass_N
+                if mass_estimator == 'grad':
+                    diag_mass_avg += (grad[:]**2 - diag_mass_avg)/diag_mass_N
+                elif mass_estimator == 'covar':
+                    diag_mass_delta = (grad[:] - diag_mass_mu)
+                    diag_mass_mu += diag_mass_delta/diag_mass_N
+                    diag_mass_M2 += diag_mass_delta*(grad[:] - diag_mass_mu)
+                    diag_mass_avg = diag_mass_M2/diag_mass_N
 
                 mass_chol = np.sqrt(diag_mass_avg)
                 inv_mass = 1.0/diag_mass_avg
